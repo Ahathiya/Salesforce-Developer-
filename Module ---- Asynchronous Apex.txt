@@ -1,0 +1,222 @@
+Module ---- Asynchronous Apex
+
+    2. Use Future Methods
+    
+                  i) AccountProcessor.apxc
+              
+                                          public without sharing class AccountProcessor 
+			  {
+                                              @future
+                                              public static void countContacts(List<Id> accountIds) 
+			      {
+                                                  List<Account> accounts = [SELECT Id, (SELECT Id FROM Contacts) FROM Account WHERE Id IN :accountIds];
+                                                  for(Account acc : accounts) 
+			          {
+                                                      acc.Number_of_Contacts__c = acc.Contacts.size();
+                                                   }
+                                                   update accounts;
+                                               }
+                                           }
+      
+                    ii) AccountProcessorTest.apxc
+ 
+                                          @isTest
+                                          public class AccountProcessorTest 
+			  {
+                                              @isTest
+                                              private static void countContactsTest() 
+			      {
+				List<Account> accounts = new List<Account>();
+                                                     for (Integer i = 0; i < 300; i++) 
+				{
+                                                             accounts.add(new Account(Name = 'Test Account' + i));
+                                                  	}
+                                                  	insert accounts;
+                                                  	List<Contact> contacts = new List<Contact>();
+                                                  	List<Id> accountIds = new List<Id>();
+                                                  	for(Account acc: accounts) 
+				{
+                                                      	contacts.add(new Contact(FirstName=acc.Name, LastName='TestContact', AccountId=acc.Id));
+                                                      	accountIds.add(acc.Id);
+                                                  	}
+                                                  	insert contacts;
+                                                  	
+				Test.startTest();
+                                                  	AccountProcessor.countContacts(accountIds);
+                                                  	Test.stopTest();
+                                                  	
+				List<Account> accs = [SELECT Id, Number_Of_Contacts__c FROM Account];
+                                                  	for(Account acc: accs) 
+				{
+                                                      	System.assertEquals(1, acc.Number_Of_Contacts__c, 'ERROR: At least 1 Account record with incorrect');
+                                                  	}
+                                              }
+                                          }
+
+    3. Use Batch Apex
+    
+                    i) LeadProcessor.apxc
+
+                                        public without sharing class LeadProcessor implements Database.Batchable<sObject> 
+			{
+                                            public Integer recordCount = 0;
+                                            public Database.QueryLocator start(Database.BatchableContext dbc) 
+			    {
+                                                return Database.getQueryLocator([SELECT Id, Name FROM Lead]);
+                                            }
+                                            public void execute(Database.BatchableContext dbc, List<Lead> Leads) 
+			    {
+                                                for(Lead l : leads) 
+			        {
+                                                    l.LeadSource = 'Dreamforce';
+                                                }
+                                                update leads;
+                                                recordCount = recordCount + leads.size();
+                                            }
+                                            public void finish(Database.BatchableContext dbc) 
+			    {
+                                                System.debug('Total records processed' + recordCount);
+                                            }
+                                        }
+
+                         ii) LeadProcessorTest.apxc
+                 
+                                                  @isTest
+                                                  public class LeadProcessorTest 
+			          {
+
+                                                      @isTest
+                                                      private static void testBatchClass() 
+				{
+                                                          List<Lead> leads = new List<Lead>();
+                                                          for (Integer i = 0; i < 200; i++) 
+				     {
+                                                              leads.add(new Lead(LastName='Connock', Company='Salesforce'));
+                                                          }
+                                                          insert leads;
+                                                          
+				    Test.startTest();
+                                                          LeadProcessor lp = new LeadProcessor();
+                                                          Id batchId = Database.executeBatch(lp, 200);
+                                                          Test.stopTest();
+                                                          
+                                                          List<Lead> updateLeads = [SELECT Id FROM Lead WHERE LeadSource = 'Dreamforce'];
+                                                          System.assertEquals(200, updateLeads.size(), 'ERROR: At least 1 Lead record not updated correctly');
+                                                      }
+                                                  }
+
+
+    4. Control Processes with Queueable Apex
+    
+                        i) AddPrimaryContact.apxc
+                        
+                                               public without sharing class AddPrimaryContact implements Queueable 
+			       {
+                                                  	private Contact contact;
+                                                  	private String state;
+                                                  	public AddPrimaryContact (Contact inputContact, String inputState) 
+				{
+                                                      	this.contact = inputContact;
+                                                      	this.state = inputState;
+                                                  	}
+                                                  	public void execute(QueueableContext context) 
+				{                                        
+	                                                      List<Account> accounts = [SELECT Id FROM Account WHERE BillingState = :state LIMIT 200];			
+                                                      	 List<Contact> contacts = new List<Contact>();
+                                                      	 for (Account acc : accounts) 
+					{
+						 Contact contactClone = contact.clone();
+                                                           		 contactClone.AccountId = acc.Id;
+                                                          	 	 contacts.add(contactClone);
+                                                      	}
+                                                      	insert contacts;
+                                                  	}
+                                                 }
+                                              
+                            ii) AddPrimaryContactTest.apxc
+                                              
+                                            @isTest
+                                            public class AddPrimaryContactTest 
+			    {
+                                                @isTest
+                                                private static void testQueueableClass() 
+			        {                                                
+                                                    List<Account> accounts = new List<Account>();
+                                                    for (Integer i = 0; i < 500; i++) 
+			            {
+                                                        Account acc = new Account(Name = 'Test Account');
+                                                        if (i < 250) 
+				   {
+                                                            	acc.BillingState = 'NY';
+                                                         } 
+				    else 
+				    {
+                                                            	acc.BillingState = 'CA';
+                                                          }
+                                                          accounts.add(acc);
+                                                      }
+                                                      insert accounts;
+                                                      Contact contact = new Contact(FirstName = 'Simon', LastName = 'Connock');
+                                                      insert contact;
+                                                    
+                                                      Test.startTest();
+                                                      Id jobId = System.enqueueJob(new AddPrimaryContact(contact, 'CA'));
+                                                      Test.stopTest();
+                                                    
+                                                       List<Contact> contacts = [SELECT Id FROM contact WHERE Contact.Account.BillingState = 'CA'];
+                                                       System.assertEquals(200, contacts.size(), 'ERROR: Incorrect number of Contact records found');
+                                                   }
+                                              }
+
+
+    5. Schedule Jobs Using the Apex Scheduler
+    
+                          i) DailyLeadProcessor.apxc
+              
+                                                  public without sharing class DailyLeadProcessor implements Schedulable 
+			          {
+                                                      public void execute(SchedulableContext ctx) 
+				{
+                                                          List<Lead> leads = [SELECT Id, LeadSource FROM Lead WHERE LeadSource = null LIMIT 200];
+                                                          for (Lead l : leads) 
+				    {
+                                                              l.LeadSource = 'Dreamforce';
+                                                         }
+                                                         update leads;
+                                                      }
+                                                  }
+                            
+                           ii) DailyLeadProcessorTest.apxc
+              
+                                              @isTest
+                                              public class DailyLeadProcessorTest 
+			      {
+                                                    private static String CRON_EXP = '0 0 0 ? * * *'; 
+                                                    @isTest
+                                                    private static void testSchedulableClass() 
+			            {
+                                                           	List<Lead> leads = new List<Lead>();
+                                                      	for (Integer i = 0; i < 500; i++) 
+					{
+                                                          		if (i < 250) 
+						{
+                                                              			leads.add(new Lead(LastName = 'Connock', Company = 'Salesforce'));
+                                                          		} 
+						else 
+						{
+                                                              			leads.add(new Lead(LastName = 'Connock', Company = 'Salesforce', LeadSource = 'Other'));
+                                                          		}
+                                                      	}
+                                                      	insert leads;
+                                                      
+                                                      	Test.startTest();
+                                                      	String jobId = System.schedule('Process Leads', CRON_EXP, new DailyLeadProcessor());
+                                                      	Test.stopTest();
+                                                      
+                                                      	List<Lead> updatedLeads = [SELECT Id, LeadSource FROM Lead WHERE LeadSource = 'Dreamforce'];
+                                                      	System.assertEquals(200, updatedLeads.size(), 'ERROR: At least 1 record not updated correctly');
+                                                      
+                                                      	List<CronTrigger> cts = [SELECT Id, TimesTriggered, NextFireTime FROM CronTrigger WHERE Id = :jobId];
+                                                      	System.debug('Next Fire Time ' + cts[0].NextFireTime);
+                                                  }
+                                              }
